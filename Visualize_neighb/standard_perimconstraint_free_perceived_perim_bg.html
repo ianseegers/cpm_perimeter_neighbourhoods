@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Perceived perimeter background</title>
+<style type="text/css">
+body{
+		font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue",
+		 Helvetica, Arial, "Lucida Grande", sans-serif;
+	 padding : 15px;
+	 max-width: 600px;
+	 margin: auto;
+}
+td {
+	 padding: 10px;
+	 vertical-align: top;
+}
+</style>
+
+<script src="../../artistoo/build/artistoo.js"></script>
+<script src="../../artistoo/examples/fpsmeter.min.js"></script>
+<script>
+"use strict"
+
+/*	----------------------------------
+	CONFIGURATION SETTINGS
+	----------------------------------
+*/
+
+class PercentageActive extends CPM.Stat {
+	
+	computePercentageOfCell( cid, cellpixels ){
+	
+		// Get the array of pixels for this cell
+		const current_pixels = cellpixels[cid]
+	
+		// The length of this array tells us the number of pixels:
+		const totalPixels = current_pixels.length
+	
+		// Loop over pixels of the current cell and count the active ones:
+		let activePixels = 0
+		for( let i = 0; i < current_pixels.length; i++ ){
+			// PixelsByCell returns ArrayCoordinates, but we need to convert those
+			// to IndexCoordinates to look up the activity using the pxact() method.
+			const pos = this.M.grid.p2i( current_pixels[i] )
+			
+			// increase the counter if pxact() returns an activity > 0
+			if( this.M.getConstraint( "ActivityConstraint" ).pxact( pos ) > 0 ){
+				activePixels++
+			}
+		}
+		
+		// divide by total number of pixels and multiply with 100 to get percentage
+		return ( 100 * activePixels / totalPixels )
+		
+	}
+	
+	compute(){
+		// Get object with arrays of pixels for each cell on the grid, and get
+		// the array for the current cell.
+		const cellpixels = this.M.getStat( CPM.PixelsByCell ) 
+				
+		// Create an object for the output, then add stat for each cell in the loop.
+		let percentages = {}
+		for( let cid of this.M.cellIDs() ){
+			percentages[cid] = this.computePercentageOfCell( cid, cellpixels )
+		}
+		
+		return percentages
+		
+	}
+}
+
+class PerimeterConstraint2 extends CPM.PerimeterConstraint {
+
+deltaH( sourcei, targeti, src_type, tgt_type ){
+		if( src_type === tgt_type ){
+			return 0
+		}
+		const ls = this.cellParameter("LAMBDA_P2", src_type)
+		const lt = this.cellParameter("LAMBDA_P2", tgt_type)
+		if( !(ls>0) && !(lt>0) ){
+			return 0
+		}
+		const Ni = this.C.neighi( targeti )
+		let pchange = {}
+		pchange[src_type] = 0; pchange[tgt_type] = 0
+		for( let i = 0 ; i < Ni.length ; i ++  ){
+			const nt = this.C.pixti(Ni[i])
+			if( nt !== src_type ){
+				pchange[src_type]++ 
+			}
+			if( nt !== tgt_type ){
+				pchange[tgt_type]--
+			}
+			if( nt === tgt_type ){
+				pchange[nt] ++
+			}
+			if( nt === src_type ){
+				pchange[nt] --
+			}
+		}
+		let r = 0.0
+		if( ls > 0 ){
+			const pt = this.cellParameter("P2", src_type),
+				ps = this.cellperimeters[src_type]
+			const hnew = (((ps+pchange[src_type])) - pt),
+				hold = ((ps) - pt)
+			r += ls*((hnew*hnew)-(hold*hold))
+		}
+		if( lt > 0 ){
+			const pt = this.cellParameter("P2", tgt_type),
+				ps = this.cellperimeters[tgt_type]
+			const hnew = (((ps+pchange[tgt_type])) - pt),
+				hold = ((ps) - pt)
+			r += lt*((hnew*hnew)-(hold*hold))
+		}
+		// eslint-disable-next-line
+		// if(this.C.random() < 0.008){
+		// 	console.log( this.C.time + "\t" + this.C.conf.P2[1] + "\t" + this.C.conf.LAMBDA_P2[1] + "\t" + r + "\t" + 
+		// 	src_type + "\t" + tgt_type + "\t" + this.C.getStat(CPM.CentroidsWithTorusCorrection)[1][0] + "\t" + 
+		// 	this.C.getStat(CPM.CentroidsWithTorusCorrection)[1][1])
+		// }
+		return r
+	}
+}
+
+let conf = {
+	torus : [true,true],			// wrap around in  both directions.
+	seed : 3,						
+	T : 20,							// standard value.
+	
+	// Adhesion: 
+	J : [ [0,20], [20,100] ],
+	
+	// VolumeConstraint parameters
+	LAMBDA_V : [0,50],				// VolumeConstraint importance per cellkind
+	V : [0,500],					// Target volume of each cellkind
+	
+	// PerimeterConstraint parameters
+	LAMBDA_P : [0,0],				// PerimeterConstraint importance per cellkind
+	P : [0,340],					// Target perimeter of each cellkind
+	LAMBDA_P2 : [0,2], 				// Importance of perimeter constraint
+	P2 : [0,280], 
+	
+	LAMBDA_ACT : [0,0],
+	MAX_ACT:[0,0],
+	ACT_MEAN : "geometric"
+}
+
+/*	---------------------------------- */
+let C, gm, Cim
+
+function setup(fs, conf){
+	C = new CPM.CPM( fs, conf)
+	C.add(new PerimeterConstraint2(conf))
+	gm = new CPM.GridManipulator(C)
+    Cim = new CPM.Canvas(C, {zoom:6})
+}
+
+function addScalebar(){
+	C.sbpixels = []
+	let gridheight = C.extents[1]
+	let barlength = 20
+	let startx = C.extents[0] - barlength - 5
+	for( let xx = startx; xx < (startx + barlength); xx++ ){
+			C.sbpixels.push( [xx,gridheight - 5] )
+		}
+}
+
+function initialize(){
+	setup([75,75], conf)
+	addScalebar()
+	gm.seedCellAt(1, C.midpoint)
+	step()
+}
+
+function step(){
+	C.timeStep()
+    draw()
+	requestAnimationFrame( step )
+}
+
+function draw(){
+	Cim.clear("ffffff")
+	Cim.drawCells( 1, "000000" )
+	Cim.drawPixelSet(C.sbpixels, "FF0000")
+
+	// color the activity gradient
+	Cim.drawActivityValues( 1, C.getConstraint("ActivityConstraint") , col2 )
+
+	// draw perimeter
+	d2()
+}
+
+function col2(a){
+	let r = [0,0,0]
+		r[0] = 255 * a
+		r[1] = 255 * a
+		r[2] = 255 * a
+	return r
+}
+
+function calcPerims2(){
+	let count = {};
+	for(let i of C.cellBorderPixelIndices()){
+		let ii = i[0]
+		let Ni = C.grid.neighi(ii)
+		for(let a = 0; a < Ni.length ; a++){
+			let nt = C.pixti(Ni[a])
+			let ni = Ni[a]
+			if(nt == 0){
+				if(!count.hasOwnProperty(ni)){
+					count[ni] = 0
+				}
+				count[ni]++
+			}
+		}
+	}
+	return count
+}
+
+function d2(){
+	Cim.getImageData()
+	let a = calcPerims2()
+	for(let i in a){
+		let px = C.grid.i2p(i)
+		let count = a[i]
+		let count_perc = count/5
+			if(count > 0){
+				Cim.col_b = 255 
+				Cim.col_g = 255 - 255*count_perc
+				Cim.col_r = 255 - 75*count_perc
+				// if(count > 5){
+				// 	Cim.col_r = 128
+				// 	Cim.col_g = 0
+				// 	Cim.col_b = 128
+				// }
+			Cim.pxfi(px)
+		}
+	}
+		
+	Cim.putImageData()
+	// if(Math.max(...b) > 20){
+	// 	throw("A")
+	// }
+}
+
+</script>
+</head>
+<body onload="initialize()">
+ 
+ <h1>Standard Moore, perceived perimeter background</h1>
+<p>In the CPM, the perimeter is defined as a zone, indicated in purple here.
+	The size of this zone is dependent on the size of the neighbourhood used.
+	Scale bar indicates 20 pixels.
+</p>
+ 
+</body>
+</html>
